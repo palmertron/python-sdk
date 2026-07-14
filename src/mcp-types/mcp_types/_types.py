@@ -188,6 +188,69 @@ class PaginatedResult(Result):
     """
 
 
+ToolsetStatus = Literal["stable", "deprecated", "experimental"]
+"""Lifecycle status of a published Toolset version (toolsets extension)."""
+
+
+class ToolsetRef(MCPModel):
+    """Reference to a published Toolset `(name, version)` pin."""
+
+    name: str
+    """Toolset identifier within the server."""
+    version: str
+    """Exact Toolset SemVer. Ranges are not supported in v1."""
+
+
+class Toolset(MCPModel):
+    """A named, versioned, immutable capability surface (toolsets extension)."""
+
+    name: str
+    """Toolset identifier within the server. Unique together with `version`."""
+    version: str
+    """Semantic Version 2.0.0 of this Toolset publication."""
+    title: str | None = None
+    """Optional human-readable display name."""
+    description: str | None = None
+    """Optional description of the capability surface."""
+    status: ToolsetStatus = "stable"
+    """Lifecycle status of this Toolset version."""
+    tools: list[str]
+    """Fixed membership: tool names included in this surface."""
+    deprecation_date: str | None = None
+    """Optional ISO-8601 date after which clients SHOULD stop selecting this version."""
+
+
+class ListToolsetsRequestParams(RequestParams):
+    """Parameters for `toolsets/list`."""
+
+    name: str | None = None
+    """If set, only Toolsets with this name."""
+    status: ToolsetStatus | None = None
+    """If set, only Toolsets with this status."""
+    cursor: str | None = None
+    """Opaque pagination cursor."""
+
+
+class ListToolsetsResult(PaginatedResult):
+    """Result of `toolsets/list`."""
+
+    toolsets: list[Toolset]
+
+
+class ListToolsetsRequest(Request[ListToolsetsRequestParams, Literal["toolsets/list"]]):
+    """Discover published Toolsets on a server that supports the toolsets extension."""
+
+    method: Literal["toolsets/list"] = "toolsets/list"
+    params: ListToolsetsRequestParams
+
+
+class ListToolsRequestParams(PaginatedRequestParams):
+    """Parameters for `tools/list`, including an optional Toolset pin."""
+
+    toolset: ToolsetRef | None = None
+    """When set, restrict the listing to this Toolset's membership."""
+
+
 class CacheableResult(Result):
     """Base class for results that carry client-side caching directives (2026-07-28).
 
@@ -1351,10 +1414,12 @@ class PromptListChangedNotification(
     params: NotificationParams | None = None
 
 
-class ListToolsRequest(PaginatedRequest[Literal["tools/list"]]):
+class ListToolsRequest(Request[ListToolsRequestParams | None, Literal["tools/list"]]):
     """Sent from the client to request a list of tools the server has."""
 
     method: Literal["tools/list"] = "tools/list"
+    params: ListToolsRequestParams | None = None
+    """Pagination + optional Toolset pin. Session layer materializes `_meta` on modern versions."""
 
 
 class ToolAnnotations(MCPModel):
@@ -1446,6 +1511,8 @@ class CallToolRequestParams(InputResponseRequestParams):
     arguments: dict[str, Any] | None = None
     task: TaskMetadata | None = None
     """If specified, the caller requests task-augmented execution (2025-11-25 only)."""
+    toolset: ToolsetRef | None = None
+    """When set, the tool MUST be a member of this Toolset (toolsets extension)."""
 
 
 class CallToolRequest(Request[CallToolRequestParams, Literal["tools/call"]]):

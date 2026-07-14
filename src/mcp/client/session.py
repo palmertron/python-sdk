@@ -900,6 +900,7 @@ class ClientSession:
         input_responses: types.InputResponses | None = None,
         request_state: str | None = None,
         meta: RequestParamsMeta | None = None,
+        toolset: types.ToolsetRef | None = None,
         allow_input_required: Literal[False] = False,
         allow_claimed: Literal[False] = False,
     ) -> types.CallToolResult: ...
@@ -915,6 +916,7 @@ class ClientSession:
         input_responses: types.InputResponses | None = None,
         request_state: str | None = None,
         meta: RequestParamsMeta | None = None,
+        toolset: types.ToolsetRef | None = None,
         allow_input_required: bool,
         allow_claimed: Literal[False] = False,
     ) -> types.CallToolResult | types.InputRequiredResult: ...
@@ -930,6 +932,7 @@ class ClientSession:
         input_responses: types.InputResponses | None = None,
         request_state: str | None = None,
         meta: RequestParamsMeta | None = None,
+        toolset: types.ToolsetRef | None = None,
         allow_input_required: Literal[False] = False,
         allow_claimed: bool,
     ) -> types.CallToolResult | types.Result: ...
@@ -945,6 +948,7 @@ class ClientSession:
         input_responses: types.InputResponses | None = None,
         request_state: str | None = None,
         meta: RequestParamsMeta | None = None,
+        toolset: types.ToolsetRef | None = None,
         allow_input_required: bool,
         allow_claimed: bool,
     ) -> types.CallToolResult | types.InputRequiredResult | types.Result: ...
@@ -959,6 +963,7 @@ class ClientSession:
         input_responses: types.InputResponses | None = None,
         request_state: str | None = None,
         meta: RequestParamsMeta | None = None,
+        toolset: types.ToolsetRef | None = None,
         allow_input_required: bool = False,
         allow_claimed: bool = False,
     ) -> types.CallToolResult | types.InputRequiredResult | types.Result:
@@ -972,6 +977,8 @@ class ClientSession:
         Args:
             input_responses: Responses to a prior `InputRequiredResult.input_requests`.
             request_state: Opaque state echoed from a prior `InputRequiredResult`.
+            toolset: Optional Toolset pin (toolsets extension); the called tool MUST
+                be a member of the pinned surface.
             allow_input_required: When ``False`` (default), an `InputRequiredResult`
                 from the server raises `RuntimeError`; when ``True``, it is returned
                 so the caller can resolve the requests and retry.
@@ -990,6 +997,7 @@ class ClientSession:
                     arguments=arguments,
                     input_responses=input_responses,
                     request_state=request_state,
+                    toolset=toolset,
                     _meta=meta,
                 ),
             ),
@@ -1140,7 +1148,8 @@ class ClientSession:
         """Send a tools/list request.
 
         Args:
-            params: Full pagination parameters including cursor and any future fields
+            params: Full pagination parameters including cursor, optional Toolset
+                pin (`ListToolsRequestParams.toolset`), and any future fields.
         """
         result = await self.send_request(
             types.ListToolsRequest(params=params),
@@ -1148,6 +1157,13 @@ class ClientSession:
         )
         complete = (params is None or params.cursor is None) and result.next_cursor is None
         return self._absorb_tool_listing(result, complete=complete)
+
+    async def list_toolsets(self, *, params: types.ListToolsetsRequestParams | None = None) -> types.ListToolsetsResult:
+        """Send a toolsets/list request (toolsets extension)."""
+        return await self.send_request(
+            types.ListToolsetsRequest(params=params if params is not None else types.ListToolsetsRequestParams()),
+            types.ListToolsetsResult,
+        )
 
     def _absorb_tool_listing(self, result: types.ListToolsResult, *, complete: bool) -> types.ListToolsResult:
         """Filter the listing per the 2026 x-mcp-header MUST and rebuild derived per-tool state, in place.

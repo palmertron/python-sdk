@@ -30,6 +30,7 @@ from mcp_types import (
     ListPromptsResult,
     ListResourcesResult,
     ListResourceTemplatesResult,
+    ListToolsRequestParams,
     ListToolsResult,
     MissingRequiredClientCapabilityErrorData,
     PaginatedRequestParams,
@@ -89,6 +90,8 @@ from mcp.server.stdio import stdio_server
 from mcp.server.streamable_http import EventStore
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler, SubscriptionBus
+from mcp.server.toolsets import EXTENSION_ID as TOOLSETS_EXTENSION_ID
+from mcp.server.toolsets import TOOLSET_ERROR, Toolsets
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from mcp.shared.uri_template import UriTemplate
@@ -260,6 +263,7 @@ class MCPServer(Generic[LifespanResultT]):
         configure_logging(self.settings.log_level)
 
         self._extensions: list[Extension] = []
+        self._toolsets: Toolsets | None = None
         for extension in extensions or ():
             self._apply_extension(extension)
         self._install_extension_interceptor()
@@ -331,6 +335,13 @@ class MCPServer(Generic[LifespanResultT]):
             handler = _version_gated(method) if method.protocol_versions is not None else method.handler
             self._lowlevel_server.add_request_handler(method.method, method.params_type, handler)
 
+        if isinstance(extension, Toolsets):
+            if self._toolsets is not None:
+                raise ValueError("Only one Toolsets extension may be registered")
+            self._toolsets = extension
+            # Retain optional `toolset` on tools/list (PaginatedRequestParams would drop it).
+            self._lowlevel_server.add_request_handler("tools/list", ListToolsRequestParams, self._handle_list_tools)
+
         self._lowlevel_server.extensions[extension.identifier] = extension.settings()
 
     def _install_extension_interceptor(self) -> None:
@@ -396,9 +407,25 @@ class MCPServer(Generic[LifespanResultT]):
                 anyio.run(lambda: self.run_streamable_http_async(**kwargs))
 
     async def _handle_list_tools(
-        self, ctx: ServerRequestContext[LifespanResultT], params: PaginatedRequestParams | None
+        self, ctx: ServerRequestContext[LifespanResultT], params: ListToolsRequestParams | PaginatedRequestParams | None
     ) -> ListToolsResult:
-        return ListToolsResult(tools=await self.list_tools())
+        tools = await self.list_tools()
+        toolset = params.toolset if isinstance(params, ListToolsRequestParams) else None
+        if toolset is not None:
+            if self._toolsets is None:
+                raise MCPError(
+                    code=TOOLSET_ERROR,
+                    message="Unknown Toolset",
+                    data={
+                        "extension": TOOLSETS_EXTENSION_ID,
+                        "reason": "unknown_toolset",
+                        "toolset": {"name": toolset.name, "version": toolset.version},
+                    },
+                )
+            require_client_extension(ctx, TOOLSETS_EXTENSION_ID)
+            membership = self._toolsets.membership(toolset)
+            tools = [tool for tool in tools if tool.name in membership]
+        return ListToolsResult(tools=tools)
 
     async def _handle_call_tool(
         self, ctx: ServerRequestContext[LifespanResultT], params: CallToolRequestParams

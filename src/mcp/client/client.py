@@ -29,6 +29,9 @@ from mcp_types import (
     ListPromptsResult,
     ListResourcesResult,
     ListResourceTemplatesResult,
+    ListToolsetsRequestParams,
+    ListToolsetsResult,
+    ListToolsRequestParams,
     ListToolsResult,
     LoggingLevel,
     PaginatedRequestParams,
@@ -38,6 +41,7 @@ from mcp_types import (
     ResourceTemplateReference,
     Result,
     ServerCapabilities,
+    ToolsetRef,
 )
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, MODERN_PROTOCOL_VERSIONS
 from typing_extensions import deprecated
@@ -543,10 +547,12 @@ class Client:
         cache_mode: CacheMode,
         send: Callable[[], Awaitable[_CacheableT]],
         absorb: Callable[[_CacheableT], _CacheableT] | None = None,
+        cache_key: str = "",
     ) -> _CacheableT:
         """Serve one of the four list verbs through the response cache.
 
         `absorb` (tools/list only) re-applies session-side derived state to a served cache hit.
+        `cache_key` disambiguates variants of the same method (e.g. Toolset pins).
         """
         cache = self._response_cache
         if cache is None or cache_mode == "bypass":
@@ -564,13 +570,13 @@ class Client:
                 if e.code == INVALID_PARAMS:
                     await cache.evict_method(method)
                 raise
-        if cache_mode == "use" and (hit := await cache.read(method, "")) is not None:
+        if cache_mode == "use" and (hit := await cache.read(method, cache_key)) is not None:
             # The hit is a private deep copy, so absorption may mutate it freely.
             served = cast(_CacheableT, hit)
             return served if absorb is None else absorb(served)
-        gen = cache.capture(method, "")
+        gen = cache.capture(method, cache_key)
         result = await send()
-        await cache.write(method, "", result, gen, cache_mode)
+        await cache.write(method, cache_key, result, gen, cache_mode)
         return result
 
     async def list_resources(
@@ -742,6 +748,7 @@ class Client:
         input_responses: InputResponses | None = None,
         request_state: str | None = None,
         meta: RequestParamsMeta | None = None,
+        toolset: ToolsetRef | None = None,
     ) -> CallToolResult:
         """Call a tool on the server.
 
@@ -768,6 +775,7 @@ class Client:
                 resuming from a persisted `InputRequiredResult`).
             request_state: Opaque state to seed the first call with.
             meta: Additional metadata for the request.
+            toolset: Optional Toolset pin (toolsets extension).
 
         Returns:
             The tool result.
@@ -788,6 +796,7 @@ class Client:
                 input_responses=r,
                 request_state=s,
                 meta=meta,
+                toolset=toolset,
                 allow_input_required=True,
                 # Input rounds resolve before a claimed result, so a claim may end any round.
                 allow_claimed=True,
@@ -910,15 +919,27 @@ class Client:
         *,
         cursor: str | None = None,
         meta: RequestParamsMeta | None = None,
+        toolset: ToolsetRef | None = None,
         cache_mode: CacheMode = "use",
     ) -> ListToolsResult:
-        """List available tools from the server."""
+        """List available tools from the server.
+
+        Args:
+            cursor: Pagination cursor.
+            meta: Request `_meta`.
+            toolset: Optional Toolset pin (toolsets extension).
+            cache_mode: Response-cache behaviour.
+        """
+        key = "" if toolset is None else f"{toolset.name}@{toolset.version}"
         return await self._cached_fetch(
             "tools/list",
             cursor=cursor,
             meta=meta,
             cache_mode=cache_mode,
-            send=lambda: self.session.list_tools(params=PaginatedRequestParams(cursor=cursor, _meta=meta)),
+            cache_key=key,
+            send=lambda: self.session.list_tools(
+                params=ListToolsRequestParams(cursor=cursor, toolset=toolset, _meta=meta)
+            ),
             # A cache hit skips session.list_tools, so the session re-absorbs the served
             # listing to rebuild its derived per-tool state. Hits are cursorless, but a
             # cached page 1 can carry next_cursor - never prune on a partial listing.
@@ -926,6 +947,16 @@ class Client:
                 hit, complete=hit.next_cursor is None
             ),
         )
+
+    async def list_toolsets(
+        self,
+        *,
+        name: str | None = None,
+        status: types.ToolsetStatus | None = None,
+        meta: RequestParamsMeta | None = None,
+    ) -> ListToolsetsResult:
+        """List published Toolsets (toolsets extension)."""
+        return await self.session.list_toolsets(params=ListToolsetsRequestParams(name=name, status=status, _meta=meta))
 
     @deprecated("The roots capability is deprecated as of 2026-07-28 (SEP-2577).", category=MCPDeprecationWarning)
     async def send_roots_list_changed(self) -> None:
