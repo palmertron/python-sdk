@@ -1,14 +1,15 @@
 # Toolsets
 
-**Toolsets** are named, SemVer-versioned, immutable capability surfaces: a fixed
+**Toolsets** are named, semantically versioned, immutable capability surfaces: a fixed
 membership of tool names that a client can discover and pin on `tools/list` and
 `tools/call`. They address uncontrolled tool-surface expansion when agents discover
 tools dynamically — a client pinned to `core-ops@1.2.0` never sees tools that only
 exist in a later Toolset version.
 
-This SDK ships Toolsets as the built-in `Toolsets` extension
-(`io.modelcontextprotocol/toolsets`), matching the Toolset Versioning SEP draft.
-If [Extensions](extensions.md) are new to you, skim that page first.
+This page documents the SDK's **draft reference** implementation of the Toolset
+Versioning SEP (`Toolsets` / `io.modelcontextprotocol/toolsets`). The surface is
+opt-in and may change while the SEP is under review — treat it as incubating, not a
+frozen stable API. If [Extensions](extensions.md) are new to you, skim that page first.
 
 ## Advertise and publish
 
@@ -65,7 +66,12 @@ async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
 
 Omitting `toolset` keeps today's full flat catalog. Calling a non-member under a
 pin returns a protocol `MCPError` (`reason: tool_not_in_toolset`), not a tool
-`is_error` result.
+`is_error` result. Membership names with no registered tool are omitted from a
+pinned `tools/list` (the list does not fail).
+
+When `tools/list` pagination is used, membership filtering applies **before**
+paging: build the pin's tool sequence, then apply `cursor` / `nextCursor` to that
+filtered sequence.
 
 ## Cache keys
 
