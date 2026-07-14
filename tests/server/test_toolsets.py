@@ -1,4 +1,4 @@
-"""In-memory tests for the Toolset Versioning extension prototype."""
+"""In-memory tests for the Toolset Versioning SEP draft reference implementation."""
 
 from __future__ import annotations
 
@@ -106,6 +106,39 @@ async def test_unknown_toolset_pin_on_list_raises_mcp_error() -> None:
             await client.list_tools(toolset=pin)
         assert exc_info.value.code == TOOLSET_ERROR
         assert exc_info.value.data["reason"] == "unknown_toolset"
+
+
+async def test_unknown_toolset_pin_on_call_raises_mcp_error() -> None:
+    """Spec: unknown (name, version) on tools/call returns unknown_toolset."""
+    mcp, _ = _crm_server()
+    pin = ToolsetRef(name="core-ops", version="9.9.9")
+    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.call_tool("search_contacts", {"query": "acme"}, toolset=pin)
+        assert exc_info.value.code == TOOLSET_ERROR
+        assert exc_info.value.data["reason"] == "unknown_toolset"
+
+
+async def test_pinned_tools_list_omits_membership_names_without_registered_tools() -> None:
+    """Spec: pinned tools/list omits membership names that have no registered tool."""
+    toolsets = Toolsets()
+    mcp = MCPServer("crm", extensions=[toolsets])
+
+    @mcp.tool()
+    def search_contacts(query: str) -> str:
+        return f"found:{query}"
+
+    toolsets.add_toolset(
+        name="core-ops",
+        version="1.0.0",
+        status="stable",
+        tools=["search_contacts", "ghost_tool_not_registered"],
+    )
+    pin = ToolsetRef(name="core-ops", version="1.0.0")
+
+    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+        result = await client.list_tools(toolset=pin)
+        assert [t.name for t in result.tools] == ["search_contacts"]
 
 
 async def test_pinned_call_rejects_non_member_and_allows_member() -> None:

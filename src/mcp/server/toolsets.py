@@ -1,6 +1,6 @@
 """Toolset Versioning extension (`io.modelcontextprotocol/toolsets`).
 
-Implements the wire shape from the Toolset Versioning SEP: named, SemVer'd,
+Draft reference implementation of the Toolset Versioning SEP: named, semantically versioned,
 immutable capability surfaces that clients discover via `toolsets/list` and pin
 on `tools/list` / `tools/call`.
 
