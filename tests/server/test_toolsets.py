@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from mcp_types import (
+    INVALID_PARAMS,
     METHOD_NOT_FOUND,
     MISSING_REQUIRED_CLIENT_CAPABILITY,
     TextContent,
@@ -84,6 +85,80 @@ async def test_toolsets_list_returns_published_toolsets_and_filters_by_name() ->
         assert len(named.toolsets) == 2
         empty = await client.list_toolsets(name="missing")
         assert empty.toolsets == []
+
+
+async def test_toolsets_list_cursor_continues_original_filtered_query() -> None:
+    """Spec: a cursor continues the filtered query and matching filters may be repeated."""
+    toolsets = Toolsets(page_size=1)
+    mcp = MCPServer("crm", extensions=[toolsets])
+    toolsets.add_toolset(name="core-ops", version="1.0.0", status="stable", tools=[])
+    toolsets.add_toolset(name="other", version="1.0.0", status="stable", tools=[])
+    toolsets.add_toolset(name="core-ops", version="2.0.0-exp", status="experimental", tools=[])
+    toolsets.add_toolset(name="core-ops", version="1.1.0", status="stable", tools=[])
+    toolsets.add_toolset(name="core-ops", version="1.2.0", status="stable", tools=[])
+
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
+        first = await client.list_toolsets(name="core-ops", status="stable")
+        assert [(t.name, t.version) for t in first.toolsets] == [("core-ops", "1.0.0")]
+        assert first.next_cursor is not None
+
+        second = await client.list_toolsets(cursor=first.next_cursor)
+        assert [(t.name, t.version) for t in second.toolsets] == [("core-ops", "1.1.0")]
+        assert second.next_cursor is not None
+
+        third = await client.list_toolsets(
+            name="core-ops",
+            status="stable",
+            cursor=second.next_cursor,
+        )
+        assert [(t.name, t.version) for t in third.toolsets] == [("core-ops", "1.2.0")]
+        assert third.next_cursor is None
+
+
+async def test_toolsets_list_cursor_rejects_conflicting_filter() -> None:
+    """Spec: a continuation filter that conflicts with the cursor is invalid params."""
+    toolsets = Toolsets(page_size=1)
+    mcp = MCPServer("crm", extensions=[toolsets])
+    toolsets.add_toolset(name="core-ops", version="1.0.0", tools=[])
+    toolsets.add_toolset(name="core-ops", version="1.1.0", tools=[])
+
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
+        first = await client.list_toolsets(name="core-ops")
+        assert first.next_cursor is not None
+        with pytest.raises(MCPError) as exc_info:
+            await client.list_toolsets(name="other", cursor=first.next_cursor)
+        assert exc_info.value.code == INVALID_PARAMS
+        assert exc_info.value.data == {"reason": "invalid_cursor"}
+
+
+@pytest.mark.parametrize("cursor", ["%", "e30"])
+async def test_toolsets_list_rejects_malformed_cursor(cursor: str) -> None:
+    """Spec: malformed opaque cursors are invalid params."""
+    toolsets = Toolsets(page_size=1)
+    mcp = MCPServer("crm", extensions=[toolsets])
+
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.list_toolsets(cursor=cursor)
+        assert exc_info.value.code == INVALID_PARAMS
+        assert exc_info.value.data == {"reason": "invalid_cursor"}
+
+
+async def test_toolsets_list_rejects_cursor_after_filtered_result_shrinks() -> None:
+    """SDK: a cursor whose offset no longer exists in its filtered query is invalid."""
+    toolsets = Toolsets(page_size=1)
+    mcp = MCPServer("crm", extensions=[toolsets])
+    toolsets.add_toolset(name="core-ops", version="1.0.0", status="stable", tools=[])
+    retired = toolsets.add_toolset(name="core-ops", version="1.1.0", status="stable", tools=[])
+
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
+        first = await client.list_toolsets(name="core-ops", status="stable")
+        assert first.next_cursor is not None
+        retired.status = "deprecated"
+        with pytest.raises(MCPError) as exc_info:
+            await client.list_toolsets(cursor=first.next_cursor)
+        assert exc_info.value.code == INVALID_PARAMS
+        assert exc_info.value.data == {"reason": "invalid_cursor"}
 
 
 async def test_unpinned_tools_list_returns_full_catalog() -> None:
@@ -277,6 +352,12 @@ def test_toolset_cache_key_encodes_pin_or_empty() -> None:
     """SDK: cache key is empty when unpinned and name@version when pinned."""
     assert toolset_cache_key(None) == ""
     assert toolset_cache_key(ToolsetRef(name="core-ops", version="1.2.0")) == "core-ops@1.2.0"
+
+
+def test_toolsets_rejects_non_positive_page_size() -> None:
+    """SDK: Toolsets rejects a page size that cannot make pagination progress."""
+    with pytest.raises(ValueError):
+        Toolsets(page_size=0)
 
 
 async def test_duplicate_toolset_registration_raises() -> None:

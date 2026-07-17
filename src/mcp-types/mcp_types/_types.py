@@ -220,15 +220,13 @@ class Toolset(MCPModel):
     """Optional ISO-8601 date after which clients SHOULD stop selecting this version."""
 
 
-class ListToolsetsRequestParams(RequestParams):
+class ListToolsetsRequestParams(PaginatedRequestParams):
     """Parameters for `toolsets/list`."""
 
     name: str | None = None
     """If set, only Toolsets with this name."""
     status: ToolsetStatus | None = None
     """If set, only Toolsets with this status."""
-    cursor: str | None = None
-    """Opaque pagination cursor."""
 
 
 class ListToolsetsResult(PaginatedResult):

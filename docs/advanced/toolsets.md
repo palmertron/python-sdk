@@ -42,8 +42,11 @@ toolsets.add_toolset(
 )
 ```
 
-`(name, version)` is immutable once published. Register ordinary tools with
-`@mcp.tool()`; Toolsets only declare membership by name.
+The SDK rejects republishing the same `(name, version)` in-process. Across
+deployments, permanent identity non-reuse and wire-contract stability are
+publisher conformance requirements from the SEP, not mechanically enforced
+tombstones. Register ordinary tools with `@mcp.tool()`; Toolsets only declare
+membership by name.
 
 ## Client pin
 
@@ -53,15 +56,40 @@ Clients that pin Toolsets must advertise the extension, then pass the same
 ```python
 from mcp import Client
 from mcp.client import advertise
+from mcp.server.mcpserver import MCPServer
 from mcp.server.toolsets import EXTENSION_ID
 from mcp_types import ToolsetRef
 
 pin = ToolsetRef(name="core-ops", version="1.2.0")
 
-async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
-    published = await client.list_toolsets()
-    tools = await client.list_tools(toolset=pin)  # no analyze_report
-    result = await client.call_tool("search_contacts", {"query": "acme"}, toolset=pin)
+
+async def use_toolset(mcp: MCPServer[object]) -> None:
+    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+        published = await client.list_toolsets()
+        tools = await client.list_tools(toolset=pin)  # no analyze_report
+        result = await client.call_tool("search_contacts", {"query": "acme"}, toolset=pin)
+```
+
+`toolsets/list` is paginated. Pass each opaque cursor back unchanged; the cursor
+continues the original filtered query, so continuation requests may omit the filters:
+
+```python
+from mcp import Client
+
+
+async def list_stable_toolsets(client: Client) -> None:
+    cursor = None
+    while True:
+        page = await client.list_toolsets(
+            name="core-ops" if cursor is None else None,
+            status="stable" if cursor is None else None,
+            cursor=cursor,
+        )
+        for published_toolset in page.toolsets:
+            print(published_toolset.name, published_toolset.version)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
 ```
 
 Omitting `toolset` keeps today's full flat catalog. Calling a non-member under a
@@ -69,9 +97,9 @@ pin returns a protocol `MCPError` (`reason: tool_not_in_toolset`), not a tool
 `is_error` result. Membership names with no registered tool are omitted from a
 pinned `tools/list` (the list does not fail).
 
-When `tools/list` pagination is used, membership filtering applies **before**
-paging: build the pin's tool sequence, then apply `cursor` / `nextCursor` to that
-filtered sequence.
+If a server later returns multi-page pinned `tools/list` results, membership
+filtering applies **before** paging. This SDK currently returns the complete
+filtered membership as a single page.
 
 ## Cache keys
 

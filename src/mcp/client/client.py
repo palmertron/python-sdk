@@ -966,15 +966,24 @@ class Client:
         *,
         name: str | None = None,
         status: types.ToolsetStatus | None = None,
+        cursor: str | None = None,
         meta: RequestParamsMeta | None = None,
     ) -> ListToolsetsResult:
         """List published Toolsets (toolsets extension).
+
+        Args:
+            name: Optional Toolset name filter.
+            status: Optional lifecycle status filter.
+            cursor: Opaque pagination cursor returned by the preceding page.
+            meta: Request metadata.
 
         Raises:
             MCPError: The server does not advertise the Toolsets extension.
         """
         self._require_server_extension(_TOOLSETS_EXTENSION_ID)
-        return await self.session.list_toolsets(params=ListToolsetsRequestParams(name=name, status=status, _meta=meta))
+        return await self.session.list_toolsets(
+            params=ListToolsetsRequestParams(name=name, status=status, cursor=cursor, _meta=meta)
+        )
 
     def _require_server_extension(self, identifier: str) -> None:
         extensions = self.server_capabilities.extensions
