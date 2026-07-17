@@ -15,6 +15,7 @@ import anyio.lowlevel
 import mcp_types as types
 from mcp_types import (
     INVALID_PARAMS,
+    METHOD_NOT_FOUND,
     CacheableResult,
     CallToolResult,
     CompleteResult,
@@ -76,6 +77,8 @@ from mcp.shared.session import RequestResponder
 from mcp.shared.subscriptions import event_to_notification
 
 logger = logging.getLogger(__name__)
+
+_TOOLSETS_EXTENSION_ID = "io.modelcontextprotocol/toolsets"
 
 ConnectMode = Literal["legacy", "auto"] | str
 """``mode=`` value: ``"legacy"`` (initialize handshake), ``"auto"`` (discover, fall back to
@@ -641,7 +644,9 @@ class Client:
 
         Raises:
             InputRequiredRoundsExceededError: `input_required_max_rounds` exhausted.
-            MCPError: A callback returned `ErrorData` for an embedded input request.
+            MCPError: The server does not advertise the Toolsets extension when
+                `toolset` is supplied, or a callback returned `ErrorData` for an
+                embedded input request.
             pydantic.ValidationError: The server returned a result that does not
                 conform to the negotiated protocol version.
         """
@@ -786,6 +791,8 @@ class Client:
             pydantic.ValidationError: The server returned a result that does not
                 conform to the negotiated protocol version.
         """
+        if toolset is not None:
+            self._require_server_extension(_TOOLSETS_EXTENSION_ID)
 
         async def retry(r: InputResponses | None, s: str | None) -> CallToolResult | InputRequiredResult | Result:
             return await self.session.call_tool(
@@ -929,7 +936,13 @@ class Client:
             meta: Request `_meta`.
             toolset: Optional Toolset pin (toolsets extension).
             cache_mode: Response-cache behaviour.
+
+        Raises:
+            MCPError: The server does not advertise the Toolsets extension when
+                `toolset` is supplied.
         """
+        if toolset is not None:
+            self._require_server_extension(_TOOLSETS_EXTENSION_ID)
         key = "" if toolset is None else f"{toolset.name}@{toolset.version}"
         return await self._cached_fetch(
             "tools/list",
@@ -955,8 +968,22 @@ class Client:
         status: types.ToolsetStatus | None = None,
         meta: RequestParamsMeta | None = None,
     ) -> ListToolsetsResult:
-        """List published Toolsets (toolsets extension)."""
+        """List published Toolsets (toolsets extension).
+
+        Raises:
+            MCPError: The server does not advertise the Toolsets extension.
+        """
+        self._require_server_extension(_TOOLSETS_EXTENSION_ID)
         return await self.session.list_toolsets(params=ListToolsetsRequestParams(name=name, status=status, _meta=meta))
+
+    def _require_server_extension(self, identifier: str) -> None:
+        extensions = self.server_capabilities.extensions
+        if extensions is None or identifier not in extensions:
+            raise MCPError(
+                code=METHOD_NOT_FOUND,
+                message=f"Server does not advertise extension {identifier!r}",
+                data={"extension": identifier},
+            )
 
     @deprecated("The roots capability is deprecated as of 2026-07-28 (SEP-2577).", category=MCPDeprecationWarning)
     async def send_roots_list_changed(self) -> None:

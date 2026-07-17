@@ -1144,7 +1144,7 @@ class ClientSession:
             types.CompleteResult,
         )
 
-    async def list_tools(self, *, params: types.PaginatedRequestParams | None = None) -> types.ListToolsResult:
+    async def list_tools(self, *, params: types.ListToolsRequestParams | None = None) -> types.ListToolsResult:
         """Send a tools/list request.
 
         Args:

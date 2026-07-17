@@ -698,7 +698,7 @@ async def test_a_cursor_page_fetch_prunes_no_per_tool_state() -> None:
     with anyio.fail_after(5):
         async with Client(server) as client:
             await client.session.list_tools()
-            await client.session.list_tools(params=types.PaginatedRequestParams(cursor="2"))
+            await client.session.list_tools(params=types.ListToolsRequestParams(cursor="2"))
             assert set(client.session._x_mcp_header_maps) == {"retired", "survivor"}
             assert set(client.session._tool_output_schemas) == {"retired", "survivor"}
 

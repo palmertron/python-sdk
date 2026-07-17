@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from mcp_types import TextContent, ToolsetRef
+from mcp_types import (
+    METHOD_NOT_FOUND,
+    MISSING_REQUIRED_CLIENT_CAPABILITY,
+    TextContent,
+    ToolsetRef,
+)
 
 from mcp import Client, MCPError
 from mcp.client import advertise
@@ -51,15 +56,25 @@ def _crm_server() -> tuple[MCPServer[object], Toolsets]:
 async def test_toolsets_extension_is_advertised_in_server_capabilities() -> None:
     """Spec/SDK: Toolsets advertises under capabilities.extensions when installed."""
     mcp, _ = _crm_server()
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
+        assert client.protocol_version == "2026-07-28"
         assert client.server_capabilities.extensions is not None
         assert EXTENSION_ID in client.server_capabilities.extensions
 
 
-async def test_toolsets_list_returns_published_sets_and_filters_by_name() -> None:
+async def test_toolsets_list_returns_method_not_found_for_legacy_client() -> None:
+    """Spec: the Toolsets extension does not define support for legacy protocol revisions."""
+    mcp, _ = _crm_server()
+    async with Client(mcp, mode="legacy", extensions=[advertise(EXTENSION_ID)]) as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.session.list_toolsets()
+        assert exc_info.value.code == METHOD_NOT_FOUND
+
+
+async def test_toolsets_list_returns_published_toolsets_and_filters_by_name() -> None:
     """Spec: toolsets/list returns published Toolsets; name filter narrows results."""
     mcp, _ = _crm_server()
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         all_sets = await client.list_toolsets()
         assert {(t.name, t.version) for t in all_sets.toolsets} == {
             ("core-ops", "1.2.0"),
@@ -74,7 +89,7 @@ async def test_toolsets_list_returns_published_sets_and_filters_by_name() -> Non
 async def test_unpinned_tools_list_returns_full_catalog() -> None:
     """Spec: omitting toolset preserves today's full flat tools/list."""
     mcp, _ = _crm_server()
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         result = await client.list_tools()
         assert {t.name for t in result.tools} == {
             "search_contacts",
@@ -84,11 +99,11 @@ async def test_unpinned_tools_list_returns_full_catalog() -> None:
         }
 
 
-async def test_pinned_tools_list_returns_only_membership() -> None:
-    """Spec: tools/list with a pin returns exactly the Toolset membership."""
+async def test_pinned_tools_list_returns_registered_members() -> None:
+    """Spec: tools/list with a pin returns registered members of the Toolset."""
     mcp, _ = _crm_server()
     pin = ToolsetRef(name="core-ops", version="1.2.0")
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         result = await client.list_tools(toolset=pin)
         assert [t.name for t in result.tools] == [
             "search_contacts",
@@ -97,22 +112,22 @@ async def test_pinned_tools_list_returns_only_membership() -> None:
         ]
 
 
-async def test_unknown_toolset_pin_on_list_raises_mcp_error() -> None:
+async def test_unknown_toolset_pin_on_list_returns_unknown_toolset_error() -> None:
     """Spec: unknown (name, version) on tools/list returns unknown_toolset."""
     mcp, _ = _crm_server()
     pin = ToolsetRef(name="core-ops", version="9.9.9")
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         with pytest.raises(MCPError) as exc_info:
             await client.list_tools(toolset=pin)
         assert exc_info.value.code == TOOLSET_ERROR
         assert exc_info.value.data["reason"] == "unknown_toolset"
 
 
-async def test_unknown_toolset_pin_on_call_raises_mcp_error() -> None:
+async def test_unknown_toolset_pin_on_call_returns_unknown_toolset_error() -> None:
     """Spec: unknown (name, version) on tools/call returns unknown_toolset."""
     mcp, _ = _crm_server()
     pin = ToolsetRef(name="core-ops", version="9.9.9")
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         with pytest.raises(MCPError) as exc_info:
             await client.call_tool("search_contacts", {"query": "acme"}, toolset=pin)
         assert exc_info.value.code == TOOLSET_ERROR
@@ -136,7 +151,7 @@ async def test_pinned_tools_list_omits_membership_names_without_registered_tools
     )
     pin = ToolsetRef(name="core-ops", version="1.0.0")
 
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         result = await client.list_tools(toolset=pin)
         assert [t.name for t in result.tools] == ["search_contacts"]
 
@@ -145,7 +160,7 @@ async def test_pinned_call_rejects_non_member_and_allows_member() -> None:
     """Spec: tools/call under a pin rejects non-members and runs members."""
     mcp, _ = _crm_server()
     pin = ToolsetRef(name="core-ops", version="1.2.0")
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         with pytest.raises(MCPError) as exc_info:
             await client.call_tool("analyze_report", {"report_id": "r1"}, toolset=pin)
         assert exc_info.value.code == TOOLSET_ERROR
@@ -162,22 +177,83 @@ async def test_older_toolset_pin_does_not_see_tools_added_in_newer_version() -> 
     mcp, _ = _crm_server()
     pin_old = ToolsetRef(name="core-ops", version="1.2.0")
     pin_new = ToolsetRef(name="core-ops", version="1.3.0")
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         old_names = {t.name for t in (await client.list_tools(toolset=pin_old)).tools}
         new_names = {t.name for t in (await client.list_tools(toolset=pin_new)).tools}
         assert "analyze_report" not in old_names
         assert "analyze_report" in new_names
 
 
-async def test_client_without_toolsets_advertise_still_gets_unpinned_tools() -> None:
+async def test_client_without_toolsets_advertisement_can_use_unpinned_tools() -> None:
     """Spec: extension is optional; unpinned clients keep basic tool use."""
     mcp, _ = _crm_server()
-    async with Client(mcp) as client:
+    async with Client(mcp, mode="auto") as client:
         result = await client.list_tools()
         assert len(result.tools) == 4
         called = await client.call_tool("search_contacts", {"query": "x"})
         assert isinstance(called.content[0], TextContent)
         assert called.content[0].text == "found:x"
+
+
+async def test_toolsets_list_without_client_advertisement_is_rejected() -> None:
+    """Spec: toolsets/list requires per-request client extension advertisement."""
+    mcp, _ = _crm_server()
+    async with Client(mcp, mode="auto") as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.list_toolsets()
+        assert exc_info.value.code == MISSING_REQUIRED_CLIENT_CAPABILITY
+
+
+async def test_pinned_tools_list_without_client_advertisement_is_rejected() -> None:
+    """Spec: a pinned tools/list requires per-request client extension advertisement."""
+    mcp, _ = _crm_server()
+    pin = ToolsetRef(name="core-ops", version="1.2.0")
+    async with Client(mcp, mode="auto") as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.list_tools(toolset=pin)
+        assert exc_info.value.code == MISSING_REQUIRED_CLIENT_CAPABILITY
+
+
+async def test_pinned_tool_call_without_client_advertisement_is_rejected() -> None:
+    """Spec: a pinned tools/call requires per-request client extension advertisement."""
+    mcp, _ = _crm_server()
+    pin = ToolsetRef(name="core-ops", version="1.2.0")
+    async with Client(mcp, mode="auto") as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.call_tool("search_contacts", {"query": "acme"}, toolset=pin)
+        assert exc_info.value.code == MISSING_REQUIRED_CLIENT_CAPABILITY
+
+
+async def test_toolsets_list_rejects_server_without_extension_advertisement() -> None:
+    """Spec: clients confirm server support before sending toolsets/list."""
+    mcp = MCPServer("crm")
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.list_toolsets()
+        assert exc_info.value.code == METHOD_NOT_FOUND
+        assert exc_info.value.data == {"extension": EXTENSION_ID}
+
+
+async def test_pinned_tools_list_rejects_server_without_extension_advertisement() -> None:
+    """Spec: clients confirm server support before sending a pinned tools/list."""
+    mcp = MCPServer("crm")
+    pin = ToolsetRef(name="core-ops", version="1.2.0")
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.list_tools(toolset=pin)
+        assert exc_info.value.code == METHOD_NOT_FOUND
+        assert exc_info.value.data == {"extension": EXTENSION_ID}
+
+
+async def test_pinned_tool_call_rejects_server_without_extension_advertisement() -> None:
+    """Spec: clients confirm server support before sending a pinned tools/call."""
+    mcp = MCPServer("crm")
+    pin = ToolsetRef(name="core-ops", version="1.2.0")
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
+        with pytest.raises(MCPError) as exc_info:
+            await client.call_tool("search_contacts", {"query": "acme"}, toolset=pin)
+        assert exc_info.value.code == METHOD_NOT_FOUND
+        assert exc_info.value.data == {"extension": EXTENSION_ID}
 
 
 async def test_toolsets_list_filters_by_status() -> None:
@@ -192,7 +268,7 @@ async def test_toolsets_list_filters_by_status() -> None:
     toolsets.add_toolset(name="core-ops", version="1.0.0", status="stable", tools=["search_contacts"])
     toolsets.add_toolset(name="core-ops", version="2.0.0-exp", status="experimental", tools=["search_contacts"])
 
-    async with Client(mcp, extensions=[advertise(EXTENSION_ID)]) as client:
+    async with Client(mcp, mode="auto", extensions=[advertise(EXTENSION_ID)]) as client:
         stable = await client.list_toolsets(status="stable")
         assert [(t.name, t.version) for t in stable.toolsets] == [("core-ops", "1.0.0")]
 

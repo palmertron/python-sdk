@@ -21,6 +21,7 @@ from mcp_types import (
     ToolsetRef,
     ToolsetStatus,
 )
+from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.extension import Extension, MethodBinding
@@ -34,7 +35,7 @@ TOOLSET_ERROR = -32007
 
 
 class Toolsets(Extension):
-    """Extension that publishes versioned Toolsets and enforces membership pins.
+    """2026-07-28+ extension that publishes Toolsets and enforces membership pins.
 
     Register Tools on the host `MCPServer` as usual, then publish Toolset versions
     that name those tools. Passing this extension to `MCPServer` advertises
@@ -153,6 +154,7 @@ class Toolsets(Extension):
                 "toolsets/list",
                 ListToolsetsRequestParams,
                 list_toolsets,
+                protocol_versions=frozenset(MODERN_PROTOCOL_VERSIONS),
             )
         ]
 

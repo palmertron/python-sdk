@@ -1326,13 +1326,13 @@ def _version_gated(method: MethodBinding) -> RequestHandler:
 
 
 def require_client_extension(ctx: ServerRequestContext[Any, Any], identifier: str) -> None:
-    """Assert the connected client declared support for `identifier`.
+    """Assert the current request declares support for `identifier`.
 
     Call this from an extension's handler or `intercept_tool_call` before
     offering extension-specific behaviour. Raises `MCPError` with the
     `-32021` (missing required client capability) code and a
     `requiredCapabilities` payload when the client did not declare the
-    extension, per SEP-2133.
+    extension in its per-request capabilities, per SEP-2575.
 
     Args:
         ctx: The current request context.
